@@ -21,6 +21,51 @@ Two approaches:
 - A Windows 11 ISO (volume licensing / MSDN). Place it in `C:\ISO\Win11.iso` or set `$env:WIN11_ISO`.
 - PowerShell 5.1+ (built-in) — scripts avoid external dependencies on purpose.
 
+### Manual prerequisites (alternative to the bootstrap script)
+
+If you prefer to do each step yourself (or want to understand what `Enable-LabBootstrap.ps1` automates):
+
+**1. Enable Hyper-V** — elevated PowerShell:
+
+```powershell
+# Check first
+Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V-All
+
+# Install if Disabled (restart required)
+Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V -All -NoRestart
+```
+
+Requires Windows Pro/Enterprise/Education (Home has no Hyper-V) and VT-x/AMD-V enabled in BIOS/UEFI.
+Verify hardware support: `(Get-CimInstance Win32_ComputerSystem).HypervisorPresent` after reboot.
+
+**2. Verify the Hyper-V PowerShell module** (comes with the feature; open a NEW console after reboot):
+
+```powershell
+Get-Command Get-VM   # should return a cmdlet, not an error
+```
+
+**3. Place your Windows 11 ISO** — copy your volume-license/MSDN ISO into a folder of your choice,
+e.g. `<repo>\iso\Win11.iso` (the repo's `iso/` folder is gitignored via `*.iso`, so it will never be
+committed). Or keep it wherever you like and register its path instead.
+
+**4. Set the `WIN11_ISO` environment variable** so all scripts find the ISO without `-IsoPath`:
+
+```powershell
+# Persist for your user (survives reboots, picked up by new consoles)
+[Environment]::SetEnvironmentVariable('WIN11_ISO', 'C:\path\to\Win11.iso', 'User')
+
+# Also set it for the CURRENT session (user-scope vars are not visible in already-open consoles):
+$env:WIN11_ISO = [Environment]::GetEnvironmentVariable('WIN11_ISO', 'User')
+```
+
+Note: because the deploy script self-elevates, the *elevated* process inherits the environment from
+your launching console — so step 4's session-level line matters on first use.
+
+**5. (Optional) Hyper-V Administrators group** — add your account to `BUILTIN\Hyper-V Administrators`
+(`lusrmgr.msc` or `Add-LocalGroupMember -Group 'Hyper-V Administrators' -Member $env:USERNAME`) and
+re-login. With this membership, `New-Win11LabVM.ps1` runs without full admin; elevation is only
+requested if your build denies vTPM key-protector creation.
+
 ## Quick start (standalone)
 
 ```powershell
