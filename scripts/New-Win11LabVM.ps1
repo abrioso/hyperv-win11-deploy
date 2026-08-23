@@ -67,11 +67,36 @@ if (-not (Get-Command Get-VM -ErrorAction SilentlyContinue)) {
 if (-not (Test-Path $IsoPath)) {
     throw "ISO not found at '$IsoPath'. Pass -IsoPath or set `$env:WIN11_ISO."
 }
-if ([Security.Principal.WindowsIdentity]::GetCurrent().Owner -ne [Security.Principal.WindowsIdentity]::GetAnonymous()) {
-    # cheap admin check
-    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
-               ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-    if (-not $isAdmin) { throw 'Run this script from an elevated PowerShell session.' }
+
+# Least privilege: full admin is NOT required. Membership of the local
+# 'Hyper-V Administrators' group is enough for everything except (on some
+# builds) creating a new VM key protector for vTPM — that case is handled
+# at the vTPM step below with a targeted self-elevation fallback.
+function Test-HyperVAdmin {
+    $id  = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $wid = $id.User
+    foreach ($sid in 'S-1-5-32-578',   # BUILTIN\Hyper-V Administrators
+                     'S-1-5-32-544') { # BUILTIN\Administrators
+        try {
+            $grp = New-Object Security.Principal.SecurityIdentifier($sid)
+            if ($id.Groups -contains $grp) { return $true }
+        } catch { }
+    }
+    return $false
+}
+$script:IsHyperVAdmin = Test-HyperVAdmin
+if (-not $script:IsHyperVAdmin) {
+    Write-Warning 'Not a member of Hyper-V Administrators or Administrators - relaunching elevated (UAC)...'
+    $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"")
+    foreach ($k in $PSBoundParameters.Keys) {
+        if ($PSBoundParameters[$k] -is [switch]) {
+            if ($PSBoundParameters[$k]) { $argList += "-$k" }
+        } else {
+            $argList += "-$k `"$($PSBoundParameters[$k])`""
+        }
+    }
+    Start-Process powershell.exe -Verb RunAs -ArgumentList $argList
+    exit 0
 }
 #endregion
 
@@ -119,8 +144,23 @@ Enable-VMIntegrationService -VMName $VMName -Name 'Guest Service Interface'
 
 # Windows 11 hard requirements: Secure Boot (Win11 template) + vTPM 2.0
 Set-VMFirmware -VMName $VMName -SecureBootTemplate MicrosoftWindowsWindows11
-Set-VMKeyProtector -VMName $VMName -NewLocalKeyProtector
-Enable-VMTPM -VMName $VMName
+try {
+    Set-VMKeyProtector -VMName $VMName -NewLocalKeyProtector -ErrorAction Stop
+    Enable-VMTPM -VMName $VMName
+} catch [Exception] {
+    # Some builds deny key protector creation to Hyper-V Administrators.
+    # Fall back: relaunch just the remaining work elevated (UAC) and exit.
+    Write-Warning "Key protector creation denied without full admin ($($_.Exception.Message))."
+    Write-Host 'Relaunching elevated to complete vTPM setup...' -ForegroundColor Yellow
+
+    $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"", '-VMName', "`"$VMName`"",
+                 '-MemoryGB', $MemoryGB, '-ProcessorCount', $ProcessorCount,
+                 '-DiskGB', $DiskGB, '-SwitchName', "`"$SwitchName`"",
+                 '-AdminPassword', "`"$AdminPassword`"", '-Force')   # -Force: VM already exists from the non-elevated attempt
+    if ($IsoPath) { $argList += @('-IsoPath', "`"$IsoPath`"") }
+    Start-Process powershell.exe -Verb RunAs -ArgumentList $argList
+    exit 1
+}
 
 Add-VMDvdDrive -VMName $VMName -Path $IsoPath
 Add-VMDvdDrive -VMName $VMName -Path $dataIso
