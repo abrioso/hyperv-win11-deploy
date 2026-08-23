@@ -39,7 +39,7 @@
 param(
     [string]$IsoPath,
     [switch]$DownloadEvalIso,
-    [string]$IsoDir = 'C:\ISO'
+    [string]$IsoDir = $(if ($PSScriptRoot) { Join-Path (Split-Path $PSScriptRoot -Parent) 'iso' } else { 'C:\ISO' })
 )
 
 $ErrorActionPreference = 'Stop'
@@ -55,8 +55,18 @@ Write-Step 'Checking elevation'
 $identity  = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = [Security.Principal.WindowsPrincipal]$identity
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    Write-Fail 'Not elevated. Re-run from an elevated PowerShell session.'
-    exit 1
+    Write-Host '    Not elevated — relaunching elevated (UAC prompt)...' -ForegroundColor Yellow
+
+    # Rebuild the argument list, preserving the original switches/parameters
+    $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"")
+    foreach ($k in $PSBoundParameters.Keys) {
+        switch -Wildcard ($k) {
+            'DownloadEvalIso' { $argList += "-DownloadEvalIso" }
+            default           { $argList += "-$k `"$($PSBoundParameters[$k])`"" }
+        }
+    }
+    Start-Process powershell.exe -Verb RunAs -ArgumentList $argList
+    exit 0   # the elevated instance takes over; this one hands off cleanly
 }
 Write-Ok "Running as $($identity.Name)"
 
