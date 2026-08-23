@@ -121,17 +121,19 @@ $xml = Get-Content $unattend -Raw
 $xml = $xml.Replace('{{ADMIN_PASSWORD}}', [System.Security.SecurityElement]::Escape($AdminPassword))
 Set-Content -Path (Join-Path $tempDir 'autounattend.xml') -Value $xml -Encoding UTF8
 
-# Build a small data ISO with oscdimg if available, otherwise fall back to a VFD-less approach:
-# New-VHD + Mount + copy works too, but Gen2 has no floppy; simplest reliable carrier is a data DVD.
-$dataIso = Join-Path $env:TEMP "unattend-$VMName.iso"
-$oscdimg = Get-ChildItem "$env:ProgramFiles*\Windows Kits\10\Assessment and Deployment Kit\Deployment Tools\amd64\Oscdimg\oscdimg.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-if ($oscdimg) {
-    & $oscdimg.FullName -n -m $tempDir $dataIso | Out-Null
-} else {
-    # No ADK? Use New-IsoFile community approach inline (CDFs parser)
-    Invoke-Expression (Invoke-RestMethod 'https://raw.githubusercontent.com/MicrosoftDocs/windows-powershell-docs/main/docset/winserver2019/packagemanagement/New-IsoFile.ps1') | Out-Null
-    Get-ChildItem $tempDir | New-IsoFile -Path $dataIso -Media DVDPLUSRW92 | Out-Null
-}
+# Package the unattend on a small FAT32-formatted VHD attached as a second drive.
+# Windows Setup scans ALL attached fixed/removable media for autounattend.xml at
+# the root, so no ADK/oscdimg and no data-DVD ISO is needed. Pure built-in tooling.
+$dataIso = $null
+$vhdPath = Join-Path $vmPath "$VMName-unattend.vhdx"
+New-VHD -Path $vhdPath -SizeBytes 16MB -Fixed | Out-Null
+$mounted = Mount-VHD -Path $vhdPath -Passthru
+$disk    = $mounted | Get-Disk
+Initialize-Disk -Number $disk.Number -PartitionStyle MBR
+$part = New-Partition -DiskNumber $disk.Number -UseMaximumSize -AssignDriveLetter |
+        Format-Volume -FileSystem FAT32 -NewFileSystemLabel 'UNATTEND'
+Copy-Item (Join-Path $tempDir 'autounattend.xml') -Destination "$($part.DriveLetter):\autounattend.xml"
+Dismount-VHD -Path $vhdPath
 
 Write-Verbose "Creating Gen 2 VM '$VMName'..."
 New-VM -Name $VMName -Generation 2 -MemoryStartupBytes ($MemoryGB * 1GB) `
@@ -163,13 +165,12 @@ try {
 }
 
 Add-VMDvdDrive -VMName $VMName -Path $IsoPath
-Add-VMDvdDrive -VMName $VMName -Path $dataIso
-$bootDvd  = Get-VMDvdDrive -VMName $VMName | Where-Object Path -eq $IsoPath
-$unatDvd  = Get-VMDvdDrive -VMName $VMName | Where-Object Path -eq $dataIso
+Add-VMHardDiskDrive -VMName $VMName -Path $vhdPath   # unattend carrier (FAT32)
+$bootDvd = Get-VMDvdDrive -VMName $VMName | Where-Object Path -eq $IsoPath
 
-# Boot order: install ISO first, unattend ISO second, disk third
+# Boot order: install ISO first, then disk
 Set-VMFirmware -VMName $VMName -FirstBootDevice $bootDvd
-Set-VMFirmware -VMName $VMName -BootOrder $bootDvd, $unatDvd, (Get-VMHardDiskDrive -VMName $VMName)
+Set-VMFirmware -VMName $VMName -BootOrder $bootDvd, (Get-VMHardDiskDrive -VMName $VMName)[0]
 
 if ($PSCmdlet.ShouldProcess($VMName, 'Start VM')) {
     Start-VM -Name $VMName

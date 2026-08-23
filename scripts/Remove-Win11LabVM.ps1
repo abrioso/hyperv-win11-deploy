@@ -35,7 +35,7 @@ foreach ($vhd in $vhds) {
 }
 
 # Clean up the temp unattend payload
-$tmpIso = Join-Path $env:TEMP "unattend-$VMName.iso"
-if (Test-Path $tmpIso) { Remove-Item $tmpIso -Force }
+$tmpDir = Join-Path $env:TEMP "unattend-$VMName"
+if (Test-Path $tmpDir) { Remove-Item $tmpDir -Recurse -Force }
 
 Write-Host "VM '$VMName' removed."

@@ -93,7 +93,7 @@ Defaults are sized for a 64 GB host: leave at least ~16 GB free for the host OS.
 
 1. **Generation 2 + vTPM** — Windows 11 requires TPM 2.0 and Secure Boot; the scripts add a key protector (`Set-VMKeyProtector` → `Enable-VMTPM`) so the ISO installs without bypasses.
 2. **Secure Boot template** — `MicrosoftWindowsWindows11` template (not the default MicrosoftWindows).
-3. **Unattend.xml** — auto locale (pt-PT fallback en-US), admin account, skip OOBE prompts. Injected via a floppy/VFD-less approach: mounted to `D:\Autounattend.xml` during first boot using an additional DVD drive.
+3. **Unattend.xml** — auto locale (pt-PT fallback en-US), admin account, skip OOBE prompts. Injected via a small FAT32-formatted VHD attached as a second drive — Windows Setup scans all attached media for `autounattend.xml`, so no ADK/oscdimg is needed (pure built-in tooling).
 4. **Dynamic memory** with sensible min/max instead of fixed RAM — lets you run more VMs concurrently on 64 GB.
 5. **Default Switch vs NAT** — `Default Switch` gives outbound internet with changing IPs; use the included NAT setup script if you need stable IPs between guest↔host.
 6. **Checkpoints before experiments** — standard/saved state checkpoints, not production ones, in a lab.
