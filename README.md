@@ -24,6 +24,10 @@ Two approaches:
 ## Quick start (standalone)
 
 ```powershell
+# 0. One-time bootstrap: checks Hyper-V, enables it if missing, locates/downloads the ISO
+Set-Location .\scripts
+.\Enable-LabBootstrap.ps1            # check-only first; add -DownloadEvalIso to fetch the eval ISO
+
 # From an elevated PowerShell session
 Set-Location .\scripts
 
@@ -87,6 +91,7 @@ Para inscrever as VMs em Intune via Autopilot:
 
 ```
 scripts/
+  Enable-LabBootstrap.ps1    # prerequisite check/install + ISO discovery/download
   New-Win11LabVM.ps1         # create + start a fully automated Win11 Gen2 VM
   Remove-Win11LabVM.ps1      # idempotent delete (VM, disks, snapshots)
   Checkpoint-Win11LabVM.ps1  # snapshot helper (create/list/restore)
