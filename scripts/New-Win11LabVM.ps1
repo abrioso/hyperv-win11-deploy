@@ -126,14 +126,30 @@ Set-Content -Path (Join-Path $tempDir 'autounattend.xml') -Value $xml -Encoding 
 # the root, so no ADK/oscdimg and no data-DVD ISO is needed. Pure built-in tooling.
 $dataIso = $null
 $vhdPath = Join-Path $vmPath "$VMName-unattend.vhdx"
-New-VHD -Path $vhdPath -SizeBytes 16MB -Fixed | Out-Null
-$mounted = Mount-VHD -Path $vhdPath -Passthru
-$disk    = $mounted | Get-Disk
-Initialize-Disk -Number $disk.Number -PartitionStyle MBR
-$part = New-Partition -DiskNumber $disk.Number -UseMaximumSize -AssignDriveLetter |
-        Format-Volume -FileSystem FAT32 -NewFileSystemLabel 'UNATTEND'
-Copy-Item (Join-Path $tempDir 'autounattend.xml') -Destination "$($part.DriveLetter):\autounattend.xml"
-Dismount-VHD -Path $vhdPath
+try {
+    New-VHD -Path $vhdPath -SizeBytes 16MB -Fixed -ErrorAction Stop | Out-Null
+    $mounted = Mount-VHD -Path $vhdPath -Passthru -ErrorAction Stop
+    $disk    = $mounted | Get-Disk
+    Initialize-Disk -Number $disk.Number -PartitionStyle MBR
+    $part = New-Partition -DiskNumber $disk.Number -UseMaximumSize -AssignDriveLetter |
+            Format-Volume -FileSystem FAT32 -NewFileSystemLabel 'UNATTEND'
+    Copy-Item (Join-Path $tempDir 'autounattend.xml') -Destination "$($part.DriveLetter):\autounattend.xml"
+    Dismount-VHD -Path $vhdPath
+} catch {
+    # Mounting a VHD attaches it to the host storage stack -> requires FULL admin,
+    # even for Hyper-V Administrators (unlike VM management). Relaunch elevated.
+    Write-Warning "VHD mount denied without full admin ($($_.Exception.Message))."
+    if ($mounted -and $mounted.DiskNumber -ge 0) { Dismount-VHD -Path $vhdPath -ErrorAction SilentlyContinue }
+    Write-Host 'Relaunching elevated (UAC) to build the unattend drive...' -ForegroundColor Yellow
+
+    $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"", '-VMName', "`"$VMName`"",
+                 '-MemoryGB', $MemoryGB, '-ProcessorCount', $ProcessorCount,
+                 '-DiskGB', $DiskGB, '-SwitchName', "`"$SwitchName`"",
+                 '-AdminPassword', "`"$AdminPassword`"", '-Force')
+    if ($IsoPath) { $argList += @('-IsoPath', "`"$IsoPath`"") }
+    Start-Process powershell.exe -Verb RunAs -ArgumentList $argList
+    exit 1
+}
 
 Write-Verbose "Creating Gen 2 VM '$VMName'..."
 New-VM -Name $VMName -Generation 2 -MemoryStartupBytes ($MemoryGB * 1GB) `
