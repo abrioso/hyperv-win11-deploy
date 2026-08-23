@@ -55,7 +55,11 @@ param(
 
     [string]$AdminPassword = 'Lab-Only-ChangeMe!',
 
-    [switch]$Force
+    [switch]$Force,
+
+    # Internal guard: prevents infinite elevation loops when the relaunched
+    # (elevated) instance fails again at the same step.
+    [switch]$ElevatedRetry
 )
 
 $ErrorActionPreference = 'Stop'
@@ -137,18 +141,28 @@ try {
     Dismount-VHD -Path $vhdPath
 } catch {
     # Mounting a VHD attaches it to the host storage stack -> requires FULL admin,
-    # even for Hyper-V Administrators (unlike VM management). Relaunch elevated.
-    Write-Warning "VHD mount denied without full admin ($($_.Exception.Message))."
-    if ($mounted -and $mounted.DiskNumber -ge 0) { Dismount-VHD -Path $vhdPath -ErrorAction SilentlyContinue }
-    Write-Host 'Relaunching elevated (UAC) to build the unattend drive...' -ForegroundColor Yellow
+    # even for Hyper-V Administrators (unlike VM management).
+    Write-Warning "VHD mount failed: $($_.Exception.Message)"
 
-    $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"", '-VMName', "`"$VMName`"",
-                 '-MemoryGB', $MemoryGB, '-ProcessorCount', $ProcessorCount,
-                 '-DiskGB', $DiskGB, '-SwitchName', "`"$SwitchName`"",
-                 '-AdminPassword', "`"$AdminPassword`"", '-Force')
-    if ($IsoPath) { $argList += @('-IsoPath', "`"$IsoPath`"") }
-    Start-Process powershell.exe -Verb RunAs -ArgumentList $argList
-    exit 1
+    if ($mounted -and $mounted.DiskNumber -ge 0) { Dismount-VHD -Path $vhdPath -ErrorAction SilentlyContinue }
+
+    # Only elevate ONCE per run. If we are already the elevated retry and it
+    # still fails, this is a real error (not permissions) — surface it instead
+    # of relaunching forever.
+    if ($ElevatedRetry) {
+        throw "Elevated retry also failed at VHD mount step. Original error: $($_.Exception.Message)"
+    }
+    if ($_.Exception.Message -match 'denied|access|privileg|unauthorized') {
+        Write-Host 'Looks like a permissions issue — relaunching elevated (UAC)...' -ForegroundColor Yellow
+        $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"", '-VMName', "`"$VMName`"",
+                     '-MemoryGB', $MemoryGB, '-ProcessorCount', $ProcessorCount,
+                     '-DiskGB', $DiskGB, '-SwitchName', "`"$SwitchName`"",
+                     '-AdminPassword', "`"$AdminPassword`"", '-Force', '-ElevatedRetry')
+        if ($IsoPath) { $argList += @('-IsoPath', "`"$IsoPath`"") }
+        Start-Process powershell.exe -Verb RunAs -ArgumentList $argList
+        exit 1
+    }
+    throw   # non-permission error: surface it, don't loop
 }
 
 Write-Verbose "Creating Gen 2 VM '$VMName'..."
@@ -167,17 +181,21 @@ try {
     Enable-VMTPM -VMName $VMName
 } catch [Exception] {
     # Some builds deny key protector creation to Hyper-V Administrators.
-    # Fall back: relaunch just the remaining work elevated (UAC) and exit.
-    Write-Warning "Key protector creation denied without full admin ($($_.Exception.Message))."
-    Write-Host 'Relaunching elevated to complete vTPM setup...' -ForegroundColor Yellow
-
-    $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"", '-VMName', "`"$VMName`"",
-                 '-MemoryGB', $MemoryGB, '-ProcessorCount', $ProcessorCount,
-                 '-DiskGB', $DiskGB, '-SwitchName', "`"$SwitchName`"",
-                 '-AdminPassword', "`"$AdminPassword`"", '-Force')   # -Force: VM already exists from the non-elevated attempt
-    if ($IsoPath) { $argList += @('-IsoPath', "`"$IsoPath`"") }
-    Start-Process powershell.exe -Verb RunAs -ArgumentList $argList
-    exit 1
+    Write-Warning "Key protector creation failed ($($_.Exception.Message))."
+    if ($ElevatedRetry) {
+        throw "Elevated retry also failed at vTPM step. Original error: $($_.Exception.Message)"
+    }
+    if ($_.Exception.Message -match 'denied|access|privileg|unauthorized') {
+        Write-Host 'Looks like a permissions issue — relaunching elevated (UAC)...' -ForegroundColor Yellow
+        $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"", '-VMName', "`"$VMName`"",
+                     '-MemoryGB', $MemoryGB, '-ProcessorCount', $ProcessorCount,
+                     '-DiskGB', $DiskGB, '-SwitchName', "`"$SwitchName`"",
+                     '-AdminPassword', "`"$AdminPassword`"", '-Force', '-ElevatedRetry')
+        if ($IsoPath) { $argList += @('-IsoPath', "`"$IsoPath`"") }
+        Start-Process powershell.exe -Verb RunAs -ArgumentList $argList
+        exit 1
+    }
+    throw   # non-permission error: surface it, don't loop
 }
 
 Add-VMDvdDrive -VMName $VMName -Path $IsoPath
