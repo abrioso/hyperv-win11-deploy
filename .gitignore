@@ -1,0 +1,5 @@
+# Local unattend outputs and hashes — never commit
+scripts/AutopilotHashes/
+*.iso
+*.vhdx
+*.avhdx
