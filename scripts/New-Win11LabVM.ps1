@@ -109,8 +109,8 @@ if ($oscdimg) {
 }
 
 Write-Verbose "Creating Gen 2 VM '$VMName'..."
-New-VM -Name $VMName -Generation 2 -MemoryStartupBytes (${MemoryGB}GB) `
-       -NewVHDPath $vhdPath -NewVHDSizeBytes (${DiskGB}GB) `
+New-VM -Name $VMName -Generation 2 -MemoryStartupBytes ($MemoryGB * 1GB) `
+       -NewVHDPath $vhdPath -NewVHDSizeBytes ($DiskGB * 1GB) `
        -SwitchName $SwitchName | Out-Null
 
 Set-VMProcessor -VMName $VMName -Count $ProcessorCount
